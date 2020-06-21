@@ -15,8 +15,10 @@ public:
             init_sleep_(init_sleep), backoff_fn_(backoff_fn) {}
 
   void backoff() {
+    printf("Backing off for %lu\n", sleep_time_);
     usleep(sleep_time_);
     increase_backoff_impl_();
+    printf("I'm back baby\n");
   }
 
   void increase_backoff_impl_() {

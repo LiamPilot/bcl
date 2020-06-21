@@ -204,7 +204,9 @@ namespace BCL {
           new(&ldata[i]) CT ();
         }
       }
+//      std::cout << "End of array constructor\n";
       data = BCL::broadcast(data, this->host());
+//      std::cout << "Done broadcasting\n";
     }
 
     T get(size_t idx) {
@@ -246,6 +248,7 @@ namespace BCL {
 
     void put(size_t idx, const std::vector <T> &vals) {
       if (idx + vals.size() > size()) {
+          std::cout << "index: " << idx << ", vals size: " << vals.size() << ", queue size: " << size() << "\n";
         throw std::runtime_error("Array: out of bounds access");
       }
       for (int i = idx; i < idx + vals.size(); i++) {

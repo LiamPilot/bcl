@@ -1,7 +1,10 @@
+#pragma once
+
 #include <cstdlib>
 #include <cstdio>
 #include <vector>
 #include <stdexcept>
+#include <iostream>
 
 #include <bcl/bcl.hpp>
 #include <bcl/containers/Container.hpp>
@@ -69,6 +72,7 @@ struct CircularQueue {
   }
 
   CircularQueue(const uint64_t host, const size_t capacity) {
+//    std::cout << BCL::hostname().c_str() << ": CONSTRUCTOR host: " << host << ", capacity: " << capacity << "\n";
     this->my_host = host;
     this->my_capacity = capacity;
     try {
@@ -92,12 +96,17 @@ struct CircularQueue {
       *tail.local() = 0;
       *reserved_head.local() = 0;
       *reserved_tail.local() = 0;
+//      if (host == 1)
+//          std::cout << BCL::hostname().c_str()
+//                    << ": CONSTRUCTOR head: "
+//                    << *head.local() << ", tail: " << *tail.local() << "\n";
     }
 
     head = BCL::broadcast(head, host);
     tail = BCL::broadcast(tail, host);
     reserved_head = BCL::broadcast(reserved_head, host);
     reserved_tail = BCL::broadcast(reserved_tail, host);
+//    std::cout << BCL::hostname().c_str() << ": CONSTRUCTOR head: " << BCL::rget(head) << ", tail: " << BCL::rget(tail) << "\n";
   }
 
   CircularQueue(const CircularQueue &queue) = delete;
@@ -195,9 +204,8 @@ struct CircularQueue {
   bool push_atomic_impl_(const T &val, bool synchronized = false) {
     int old_tail = BCL::fetch_and_op<int>(tail, 1, BCL::plus<int>{});
     int new_tail = old_tail + 1;
-
     if (new_tail - head_buf > capacity()) {
-      // head_buf = BCL::rget(reserved_head);
+        // head_buf = BCL::rget(reserved_head);
       if (synchronized) {
         Backoff backoff;
         while (new_tail - head_buf > capacity()) {
@@ -214,6 +222,8 @@ struct CircularQueue {
         return false;
       }
     }
+
+    std::cout << "old tail: " << old_tail << ", capacity: " << capacity() << ", data size" << sizeof(data) << "\n";
     data[old_tail % capacity()] = val;
     BCL::flush();
     int rv;
@@ -375,6 +385,10 @@ struct CircularQueue {
   }
 
   bool push_nonatomic_impl_(const std::vector <T> &vals) {
+    if (vals.size() == 0) {
+        return true;
+    }
+
     int old_tail = BCL::fetch_and_op<int>(tail, vals.size(), BCL::plus<int>{});
     int new_tail = old_tail + vals.size();
 
@@ -385,7 +399,18 @@ struct CircularQueue {
         return false;
       }
     }
-    data.put(old_tail % capacity(), vals);
+//    data.put(old_tail % capacity(), vals);
+    if ((old_tail % capacity()) + vals.size() < capacity()) {
+      // One contiguous write to 1's
+      // 00000000000001111
+      data.put(old_tail % capacity(), vals);
+    } else {
+      // "Split write:" to 1's
+      // 11111000000001111
+      size_t first_put_nelem = capacity() - old_tail % capacity();
+      data.put(old_tail % capacity(), vals.data(), first_put_nelem);
+      data.put(0, vals.data() + first_put_nelem, vals.size() - first_put_nelem);
+    }
     // XXX: flush not required here.
     BCL::fetch_and_op<int>(reserved_tail, vals.size(), BCL::plus<int>{});
     return true;
@@ -404,7 +429,9 @@ struct CircularQueue {
   }
 
   bool pop_atomic_impl_(T &val) {
+    std::cout << "Pop atomic\n";
     int old_head = BCL::fetch_and_op<int>(head, 1, BCL::plus<int>{});
+    std::cout << "incremented head\n";
     int new_head = old_head + 1;
 
     if (new_head > tail_buf) {
@@ -428,16 +455,25 @@ struct CircularQueue {
     }
     Backoff backoff(1, backoff_value);
     do {
+//      std::cout << "In a while loop\n";
       rv = BCL::compare_and_swap<int>(reserved_head, old_head, old_head + 1);
       if (rv != old_head) {
         backoff.backoff();
       }
     } while (rv != old_head);
+    std::cout << "done\n";
     return true;
   }
 
   bool pop_nonatomic_impl_(T &val) {
+//    std::cout << BCL::hostname().c_str() << ": Something happening here" << std::endl;
+//    std::cout << BCL::hostname().c_str() << ": Something happening here" << std::endl;
+//    std::cout << BCL::hostname().c_str() << ": Something happening here" << std::endl;
+//    head.print();
+//    std::cout << BCL::hostname().c_str() << ": Something happening here" << std::endl;
+//    std::cout << BCL::hostname().c_str() << ": Something happening here" << std::endl;
     int old_head = BCL::fetch_and_op<int>(head, 1, BCL::plus<int>{});
+//    std::cout << "Something else happening here" << std::endl;
     int new_head = old_head + 1;
 
     if (new_head > tail_buf) {
@@ -458,9 +494,9 @@ struct CircularQueue {
            CircularQueueAL atomicity_level = CircularQueueAL::push |
            CircularQueueAL::pop) {
     if (atomicity_level & CircularQueueAL::push) {
-      return pop_atomic_impl_(vals);
+      return pop_atomic_impl_(vals, n_to_pop);
     } else {
-      return pop_nonatomic_impl_(vals);
+      return pop_nonatomic_impl_(vals, n_to_pop);
     }
   }
 
@@ -468,7 +504,7 @@ struct CircularQueue {
     vals.resize(n_to_pop);
 
     int old_head = BCL::fetch_and_op<int>(head, n_to_pop, BCL::plus<int>());
-    int new_head = old_head + 1;
+    int new_head = old_head + n_to_pop;
 
     if (new_head > tail_buf) {
       tail_buf = BCL::fetch_and_op<int>(reserved_tail, 0, BCL::plus<int>{});
@@ -476,27 +512,31 @@ struct CircularQueue {
         BCL::fetch_and_op <int> (head, -n_to_pop, BCL::plus <int> ());
         return false;
       }
-    } else {
-
-      if ((old_head % capacity()) + vals.size() < capacity()) {
-        data.get(old_head % capacity(), vals, n_to_pop);
-      } else {
-        size_t first_get_nelem = capacity() - (old_head % capacity());
-        data.get(0, vals.data(), n_to_pop - first_get_nelem);
-      }
-
-      // BCL::flush() (implicit)
-
-      int rv;
-      Backoff backoff;
-      do {
-        rv = BCL::compare_and_swap<int>(reserved_head, old_head, old_head + n_to_pop);
-        if (rv != old_head) {
-          backoff.backoff();
-        }
-      } while (rv != old_head);
-      return true;
     }
+
+    if ((old_head % capacity()) + vals.size() < capacity()) {
+      // contiguous reads, e.g.:  000000001111111000000
+      data.get(old_head % capacity(), vals, n_to_pop);
+    } else {
+      // split reads, e.g.: 1110000000000111
+      //                      ^end       ^start
+      size_t first_get_nelem = capacity() - (old_head % capacity());
+      data.get(old_head % capacity(), vals.data(), first_get_nelem);
+      data.get(0, vals.data() + first_get_nelem, n_to_pop - first_get_nelem);
+    }
+
+    // BCL::flush() (implicit)
+
+    int rv;
+    Backoff backoff;
+    do {
+      rv = BCL::compare_and_swap<int>(reserved_head, old_head, new_head);
+      if (rv != old_head) {
+        backoff.backoff();
+      }
+    } while (rv != old_head);
+    return true;
+//    printf("ah shit\n");
   }
 
   bool pop_nonatomic_impl_(std::vector <T> &vals, size_t n_to_pop) {
@@ -550,13 +590,17 @@ struct CircularQueue {
   }
 
   void resize(const size_t new_capacity) {
+    std::cout << "Waiting at barrier\n";
     BCL::barrier();
+    std::cout << "Past barrier\n";
 
     if (new_capacity == capacity()) {
       return;
     }
 
+    std::cout << "Oh god not this\n";
     BCL::Array <T, TSerialize> new_data(host(), new_capacity);
+    std::cout << "Please no for the love of god\n";
 
     if (BCL::rank() == host()) {
       BCL::GlobalPtr <int> new_head = BCL::alloc <int> (1);

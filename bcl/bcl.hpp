@@ -5,11 +5,14 @@
 #include <bcl/core/malloc.hpp>
 #include <bcl/core/alloc.hpp>
 
+//#define GASNET_EX
+//#define GASNET_PAR
+
 #ifdef SHMEM
   #include <bcl/backends/shmem/backend.hpp>
-#elif GASNET_EX
+#elif defined(GASNET_EX)
   #include <bcl/backends/gasnet-ex/backend.hpp>
-#elif UPCXX
+#elif defined(UPCXX)
   #include <bcl/backends/upcxx/backend.hpp>
 #else
   #include <bcl/backends/mpi/backend.hpp>

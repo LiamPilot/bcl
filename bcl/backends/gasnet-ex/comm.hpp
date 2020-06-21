@@ -4,6 +4,7 @@
 #include "ops.hpp"
 #include "request.hpp"
 
+
 #include <vector>
 #include <functional>
 #include <gasnet_coll.h>
@@ -106,13 +107,18 @@ inline T allreduce(const T& val, Op fn) {
 
 template <typename T>
 T fetch_and_op(const GlobalPtr <T> ptr, const T &val, const atomic_op <T> &op) {
+  if (BCL::rank() == 1) std::cout << "I'm here" << std::endl;
   static_assert(std::is_same<T, int32_t>::value || std::is_same<T, float>::value);
   T rv;
+  if (BCL::rank() == 1) std::cout << "fetch and op" << std::endl;
   void* dst_ptr = gasnet_resolve_address(ptr);
   // TODO: select the correct AD
+  if (BCL::rank() == 1) std::cout << "event thing" << std::endl;
   gex_Event_t event = shim_gex_AD_OpNB<T>(get_gex_ad<T>(), &rv, ptr.rank, dst_ptr,
                                           op.op(), val, val, 0);
+  if (BCL::rank() == 1) std::cout << "waiting" << std::endl;
   gex_Event_Wait(event);
+  if (BCL::rank() == 1) std::cout << "done" << std::endl;
   return rv;
 }
 
